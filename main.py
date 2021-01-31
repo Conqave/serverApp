@@ -1,0 +1,1 @@
+print("Jesteś hardkorem!!!")
