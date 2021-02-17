@@ -12,17 +12,18 @@ listensocket.bind(('', Port))
 listensocket.listen(maxConnections)
 print("Server has been started at " + IP + " on port " + str(Port))
 
-(clientsocket, address) = listensocket.accept()
-print("New connection has been made!")
 
 running = True
 
 while running:
+    (clientsocket, address) = listensocket.accept()
+    print("New connection has been made!")
+    
     message = clientsocket.recv(1024).decode()
-    print(message)
-    if not message == "":
-        time.sleep(5)
-
+    #print("Cos tam")
+    if message != "":
+        print(message)
+        
 from mysql.connector import Error
 
 try:
