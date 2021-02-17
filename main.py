@@ -2,6 +2,32 @@ import mysql.connector
 import socket
 import time
 
+sequence = input("Type code to decode: ")
+
+def selectText(a, b, c):
+    temp = ""
+    
+    for x in range(b, c):
+        temp+=a[x]
+    return temp
+
+print(selectText("ala ma kota", 0, 4))
+
+def countExclamationMarks(a):
+    return a.count("!")
+    
+def checkID(a):
+    b = a.find("!1")
+    c = a.find("!2")
+    temp = ""
+    
+    for x in range(b+2, c):
+        temp += a[x]
+    return temp
+
+print(checkID(sequence))
+exit()
+
 listensocket = socket.socket()
 Port = 8000
 maxConnections = 999
