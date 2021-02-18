@@ -69,7 +69,7 @@ while running:
     #s.connect((host, port))
     #st='Connection done!'
     #byt = ans.encode()
-    #listensocket.send(byt)
+    #s.send(byt)
 
 
     #print("Cos tam")
