@@ -2,8 +2,8 @@ import mysql.connector
 import socket
 import time
 
-sequence = input("Type code to decode: ")
-
+#sequence = input("Type code to decode: ")
+sequence = "!1eband!21!3"
 def selectText(a, b, c):
     temp = ""
     
@@ -11,22 +11,34 @@ def selectText(a, b, c):
         temp+=a[x]
     return temp
 
-print(selectText("ala ma kota", 0, 4))
+#print(selectText("ala ma kota", 0, 4))
 
 def countExclamationMarks(a):
     return a.count("!")
     
 def checkID(a):
-    b = a.find("!1")
-    c = a.find("!2")
+    b = a.find("!2")
+    c = a.find("!3")
     temp = ""
     
     for x in range(b+2, c):
         temp += a[x]
     return temp
 
+def hello(a):
+    b = a.find("!1")
+    c = a.find("!2")
+    temp = ""
+    
+    for x in range(b+2, c):
+        temp += a[x]
+   
+    return temp=="eband"
+
 print(checkID(sequence))
-exit()
+
+#if hello(sequence):
+    
 
 listensocket = socket.socket()
 Port = 8000
@@ -42,13 +54,29 @@ print("Server has been started at " + IP + " on port " + str(Port))
 running = True
 
 while running:
-    (clientsocket, address) = listensocket.accept()
+    clientsocket, address = listensocket.accept()
     print("New connection has been made!")
     
+    
     message = clientsocket.recv(1024).decode()
+    ans = "Witam!"
+    
+
+    #tutaj jest kod do połączenia z androidem
+    #host2="tutaj wpisz hosta"
+    #port=tutaj podaj port
+    #s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    #s.connect((host, port))
+    #st='Connection done!'
+    #byt = ans.encode()
+    #listensocket.send(byt)
+
+
     #print("Cos tam")
     if message != "":
         print(message)
+    if hello(message):
+        print("Welecome!")
         
 from mysql.connector import Error
 
