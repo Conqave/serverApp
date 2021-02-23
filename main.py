@@ -1,6 +1,16 @@
 import mysql.connector
 import socket
 import time
+import requests
+import codecs
+
+def getHttp(a):
+    r = requests.get(a)
+
+    ans = codecs.decode(r.content, 'UTF-8')
+    return ans
+
+#print(getHttp("http://192.168.1.177"))
 
 #sequence = input("Type code to decode: ")
 sequence = "!1eband!21!3"
@@ -12,6 +22,17 @@ def selectText(a, b, c):
     return temp
 
 #print(selectText("ala ma kota", 0, 4))
+
+def getPuls(x):
+    a = getHttp(x)
+    b = a.find("!4")
+    c = a.find("!5")
+    temp = ""
+    
+    for x in range(b+2, c):
+        temp += a[x]
+    return temp
+
 
 def countExclamationMarks(a):
     return a.count("!")
@@ -52,6 +73,11 @@ print("Server has been started at " + IP + " on port " + str(Port))
 
 
 running = True
+
+
+while True:
+    print(getPuls("http://192.168.1.177"))
+
 
 while running:
     clientsocket, address = listensocket.accept()
