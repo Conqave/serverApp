@@ -1,0 +1,377 @@
+// GPRS not yet operational!!!!!!!!!!!!!!!!!!!!
+
+//#include <SoftwareSerial.h>
+//#include <ArduinoHttpClient.h>
+//#include <WiFi101.h>
+#include <Adafruit_GPS.h>
+#include <Adafruit_Sensor.h>
+#include <Wire.h>
+#include "MAX30105.h"
+#include "heartRate.h"
+#include "SIM800L.h"
+
+#define packet_delay 1000
+#define buffer_size 100
+
+int buffer_position = 0;
+unsigned long packet_id = 0;
+unsigned long packet_last = 0;
+
+// Wifi Settings
+/*char ssid[] = "OnePlus 7T Pro";
+char pass[] = "12345678";*/
+
+// GPRS Settings
+#define SIM800_RST_PIN 6
+
+const char APN[] = "Internet.be";
+const char URL[] = "https://postman-echo.com/post";
+const char CONTENT_TYPE[] = "application/json";
+
+SIM800L* sim800l;
+
+// HTTP Server Settings
+/*char serverAddress[] = "192.168.0.3";
+int port = 8080;*/
+
+// HTTP Client Setup
+/*WiFiClient wifi;
+HttpClient client = HttpClient(wifi, serverAddress, port);
+int status = WL_IDLE_STATUS;*/
+
+// GPS Pin Settings
+/*SoftwareSerial mySerial(2, 3);
+Adafruit_GPS GPS(&mySerial);*/
+
+// MQ-3 Pin Settings
+const int MQ3_AOUTpin = 0; // the AOUT pin of the alcohol sensor goes into analog pin A0 of the arduino
+
+//Pulseoximeter Settings
+MAX30105 particleSensor;
+
+const byte RATE_SIZE = 4; //Increase this for more averaging. 4 is good.
+byte rates[RATE_SIZE]; //Array of heart rates
+byte rateSpot = 0;
+long lastBeat = 0; //Time at which the last beat occurred
+
+float beatsPerMinute;
+int beatAvg;
+
+// Data Structure Definition
+
+typedef __attribute__((packed)) struct {
+    // BMP (K, hPa, m)
+    //float temperature, pressure, altitude;
+
+    // Gyro (rad/s)
+    //float gyro_x, gyro_y, gyro_z;
+
+    // Accel (m/s2)
+    //float accel_x, accel_y, accel_z;
+
+    // Mag (uT)
+    //float mag_x, mag_y, mag_z;
+
+    // GPS
+    uint8_t hour[buffer_size], minute[buffer_size], second[buffer_size];
+    uint16_t miliseconds[buffer_size];
+    uint8_t day[buffer_size], month[buffer_size], year[buffer_size];
+    bool gps_fix[buffer_size];
+    uint8_t gps_fix_quality[buffer_size];
+    // deg, deg, knots, deg, m
+    float latitude[buffer_size], longitude[buffer_size], speed[buffer_size], angle[buffer_size], gps_altitude[buffer_size];
+    uint8_t gps_num_satellites[buffer_size];
+
+    // MQ-3
+    uint16_t alcohol_value[buffer_size];
+
+    // Pulseoximeter
+    uint16_t IR[buffer_size], AvgBPM[buffer_size];
+    float BPM[buffer_size];
+    bool user_detected[buffer_size];
+
+    // Packet Details
+    uint32_t timestamp[buffer_size];
+    uint32_t packet_id[buffer_size];
+
+} toServer_t;
+
+toServer_t toServer;
+
+/*void sendPacket() {
+    Serial.println("making POST request");
+    String contentType = "application/x-www-form-urlencoded";
+
+    // Adjust accordingly:
+
+    String postData = "ID: " + String(toServer.packet_id[buffer_position]) + String(toServer.timestamp[buffer_position]);
+
+    client.post("/", contentType, postData);
+
+    // read the status code and body of the response
+    int statusCode = client.responseStatusCode();
+    String response = client.responseBody();
+
+    Serial.print("Status code: ");
+    Serial.println(statusCode);
+    Serial.print("Response: ");
+    Serial.println(response);
+}*/
+
+void sendPacket() {
+    // Adjust
+    String PAYLOAD = "ID: " + String(toServer.packet_id[buffer_position]) + String(toServer.timestamp[buffer_position]);
+    // Establish GPRS connectivity (5 trials)
+    bool connected = false;
+    for (uint8_t i = 0; i < 5 && !connected; i++) {
+        delay(1000);
+        connected = sim800l->connectGPRS();
+    }
+
+    // Check if connected, if not reset the module and setup the config again
+    if (connected) {
+        Serial.println(F("GPRS connected !"));
+    }
+    else {
+        Serial.println(F("GPRS not connected !"));
+        Serial.println(F("Reset the module."));
+        sim800l->reset();
+        setupSIMModule();
+        return;
+    }
+
+    Serial.println(F("Start HTTP POST..."));
+
+    // Do HTTP POST communication with 10s for the timeout (read and write)
+    uint16_t rc = sim800l->doPost(URL, CONTENT_TYPE, PAYLOAD, 10000, 10000);
+    if (rc == 200) {
+        // Success, output the data received on the serial
+        Serial.print(F("HTTP POST successful ("));
+        Serial.print(sim800l->getDataSizeReceived());
+        Serial.println(F(" bytes)"));
+        Serial.print(F("Received : "));
+        Serial.println(sim800l->getDataReceived());
+    }
+    else {
+        // Failed...
+        Serial.print(F("HTTP POST error "));
+        Serial.println(rc);
+    }
+
+    // Close GPRS connectivity (5 trials)
+    bool disconnected = sim800l->disconnectGPRS();
+    for (uint8_t i = 0; i < 5 && !connected; i++) {
+        delay(1000);
+        disconnected = sim800l->disconnectGPRS();
+    }
+
+    if (disconnected) {
+        Serial.println(F("GPRS disconnected !"));
+    }
+    else {
+        Serial.println(F("GPRS still connected !"));
+    }
+
+    // Go into low power mode
+    bool lowPowerMode = sim800l->setPowerMode(MINIMUM);
+    if (lowPowerMode) {
+        Serial.println(F("Module in low power mode"));
+    }
+    else {
+        Serial.println(F("Failed to switch module to low power mode"));
+    }
+}
+
+// GPRS Setup
+
+void setupGPRS() {
+    // Initialize the hardware Serial1
+    Serial1.begin(9600);
+    delay(1000);
+
+    // Initialize SIM800L driver with an internal buffer of 200 bytes and a reception buffer of 512 bytes, debug disabled
+    sim800l = new SIM800L((Stream*)&Serial1, SIM800_RST_PIN, 200, 512);
+
+    // Equivalent line with the debug enabled on the Serial
+    // sim800l = new SIM800L((Stream *)&Serial1, SIM800_RST_PIN, 200, 512, (Stream *)&Serial);
+
+    // Setup module for GPRS communication
+    setupSIMModule();
+}
+
+void setupSIMModule() {
+    // Wait until the module is ready to accept AT commands
+    while (!sim800l->isReady()) {
+        Serial.println(F("Problem to initialize AT command, retry in 1 sec"));
+        delay(1000);
+    }
+    Serial.println(F("Setup Complete!"));
+
+    // Wait for the GSM signal
+    uint8_t signal = sim800l->getSignal();
+    while (signal <= 0) {
+        delay(1000);
+        signal = sim800l->getSignal();
+    }
+    Serial.print(F("Signal OK (strenght: "));
+    Serial.print(signal);
+    Serial.println(F(")"));
+    delay(1000);
+
+    // Wait for operator network registration (national or roaming network)
+    NetworkRegistration network = sim800l->getRegistrationStatus();
+    while (network != REGISTERED_HOME && network != REGISTERED_ROAMING) {
+        delay(1000);
+        network = sim800l->getRegistrationStatus();
+    }
+    Serial.println(F("Network registration OK"));
+    delay(1000);
+
+    // Setup APN for GPRS configuration
+    bool success = sim800l->setupGPRS(APN);
+    while (!success) {
+        success = sim800l->setupGPRS(APN);
+        delay(5000);
+    }
+    Serial.println(F("GPRS config OK"));
+}
+
+// Wifi Setup
+/*void setupWiFi() {
+    while (status != WL_CONNECTED) {
+        Serial.print("Attempting to connect to Network named: ");
+        Serial.println(ssid);                   // print the network name (SSID);
+
+        // Connect to WPA/WPA2 network:
+        status = WiFi.begin(ssid, pass);
+    }
+
+    // print the SSID of the network you're attached to:
+    Serial.print("SSID: ");
+    Serial.println(WiFi.SSID());
+
+    // print your WiFi shield's IP address:
+    IPAddress ip = WiFi.localIP();
+    Serial.print("IP Address: ");
+    Serial.println(ip);
+}*/
+
+// GPS Setup & Functions
+
+void setupGPS() {
+    /*GPS.begin(9600);
+    // These lines configure the GPS Module
+    GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);  // Sets output to only RMC
+                                                   // and GGA sentences
+    GPS.sendCommand(
+        PMTK_SET_NMEA_UPDATE_1HZ);  // Sets the output to 1/second. If you want
+                                    // you can go higher/lower
+    GPS.sendCommand(PGCMD_ANTENNA);*/
+}
+
+void readGPSData() {
+    /*GPS.parse(GPS.lastNMEA());
+
+    toServer.hour[buffer_position] = GPS.hour;
+    toServer.minute[buffer_position] = GPS.minute;
+    toServer.second[buffer_position] = GPS.seconds;
+    toServer.miliseconds[buffer_position] = GPS.milliseconds;
+    toServer.day[buffer_position] = GPS.day;
+    toServer.month[buffer_position] = GPS.month;
+    toServer.year[buffer_position] = GPS.year;
+    toServer.gps_fix[buffer_position] = GPS.fix;
+    toServer.gps_fix_quality[buffer_position] = GPS.fixquality;
+    if (GPS.fix) {
+        toServer.latitude[buffer_position] = GPS.latitudeDegrees;
+        toServer.longitude[buffer_position] = GPS.longitudeDegrees;
+        toServer.speed[buffer_position] = GPS.speed;
+        toServer.angle[buffer_position] = GPS.angle;
+        toServer.gps_altitude[buffer_position] = GPS.altitude;
+        toServer.gps_num_satellites[buffer_position] = GPS.satellites;
+    }*/
+}
+
+// MQ-3 Functions
+
+void readMQ3Data() {
+    toServer.alcohol_value[buffer_position] = analogRead(MQ3_AOUTpin);
+}
+
+// Pulseoximeter Setup & Functions
+
+void setupPulseoximeter() {
+    // Initialize sensor
+    if (!particleSensor.begin(Wire, I2C_SPEED_FAST)) //Use default I2C port, 400kHz speed
+    {
+        Serial.println("MAX30105 was not found. Please check wiring/power. ");
+        while (1);
+    }
+    Serial.println("Place your index finger on the sensor with steady pressure.");
+
+    particleSensor.setup(); //Configure sensor with default settings
+    particleSensor.setPulseAmplitudeRed(0x0A); //Turn Red LED to low to indicate sensor is running
+    particleSensor.setPulseAmplitudeGreen(0); //Turn off Green LED
+}
+
+void readPulseoximeterData() {
+    long irValue = particleSensor.getIR();
+
+    if (checkForBeat(irValue) == true)
+    {
+        //We sensed a beat!
+        long delta = millis() - lastBeat;
+        lastBeat = millis();
+
+        beatsPerMinute = 60 / (delta / 1000.0);
+
+        if (beatsPerMinute < 255 && beatsPerMinute > 20)
+        {
+            rates[rateSpot++] = (byte)beatsPerMinute; //Store this reading in the array
+            rateSpot %= RATE_SIZE; //Wrap variable
+
+            //Take average of readings
+            beatAvg = 0;
+            for (byte x = 0; x < RATE_SIZE; x++)
+                beatAvg += rates[x];
+            beatAvg /= RATE_SIZE;
+        }
+    }
+
+    toServer.IR[buffer_position] = irValue;
+    Serial.print("IR=");
+    Serial.print(irValue);
+    toServer.BPM[buffer_position] = beatsPerMinute;
+    Serial.print(", BPM=");
+    Serial.print(beatsPerMinute);
+    toServer.AvgBPM[buffer_position] = beatsPerMinute;
+    Serial.print(", Avg BPM=");
+    Serial.print(beatAvg);
+
+    if (irValue < 50000) toServer.user_detected[buffer_position] = false;
+    else toServer.user_detected[buffer_position] = true;
+}
+
+void setup() {
+    Serial.begin(115200);
+    setupGPRS();
+    //setupWiFi();
+    //setupGPS();
+    //setupPulseoximeter();
+}
+
+void loop() {
+    if (millis() - packet_last >= packet_delay) {
+        packet_last = millis();
+        toServer.timestamp[buffer_position] = millis();
+        toServer.packet_id[buffer_position] = packet_id;
+        //readGPSData();
+        //readMQ3Data();
+        //readPulseoximeterData();
+        sendPacket();
+
+        packet_id++;
+
+        if (buffer_position == buffer_size) buffer_position = 0;
+        else buffer_position++;
+    }
+}
